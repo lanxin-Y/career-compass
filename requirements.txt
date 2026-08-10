@@ -1,0 +1,8 @@
+anthropic
+pydantic
+pdfplumber
+python-dotenv
+fastapi
+uvicorn[standard]
+python-multipart
+aiosqlite

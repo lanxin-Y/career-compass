@@ -4,6 +4,10 @@ __pycache__/
 .env
 venv/
 
+# Local SQLite / uploads
+backend/data/*
+!backend/data/.gitkeep
+
 # Node/React
 node_modules/
 build/
