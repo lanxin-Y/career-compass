@@ -32,10 +32,14 @@ from database import (  # noqa: E402
     find_analysis_by_hash,
     get_all_analyses,
     get_analysis,
+    get_deep_dive,
     get_deep_dives_for_analysis,
+    get_tasks_for_deep_dive,
     init_db,
     save_analysis,
     save_deep_dive,
+    save_tasks,
+    toggle_task,
 )
 from schemas import (  # noqa: E402
     AnalysisDetailResponse,
@@ -43,6 +47,8 @@ from schemas import (  # noqa: E402
     AnalysisSummary,
     DeepDiveRequest,
     DeepDiveResponse,
+    TaskResponse,
+    ToggleTaskRequest,
 )
 
 logger = logging.getLogger(__name__)
@@ -121,6 +127,62 @@ def _analysis_response(row: dict, *, cached: bool = False) -> AnalysisResponse:
         result=row["result"],
         created_at=_parse_datetime(row["created_at"]),
         cached=cached,
+    )
+
+
+def _task_response(row: dict) -> TaskResponse:
+    completed_at = row.get("completed_at")
+    return TaskResponse(
+        id=row["id"],
+        deep_dive_id=row["deep_dive_id"],
+        title=row["title"],
+        timeframe=row.get("timeframe"),
+        sort_order=row["sort_order"],
+        is_completed=bool(row["is_completed"]),
+        completed_at=_parse_datetime(completed_at) if completed_at else None,
+        created_at=_parse_datetime(row["created_at"]),
+    )
+
+
+def _extract_checklist_tasks(plan: dict) -> list[dict]:
+    """
+    Prefer top-level plan['tasks'] (title/timeframe dicts).
+    Fallback: flatten steps into checklist items if AI omitted top-level tasks.
+    """
+    raw = plan.get("tasks")
+    if isinstance(raw, list) and raw:
+        if isinstance(raw[0], dict) and raw[0].get("title"):
+            return [
+                {
+                    "title": item["title"],
+                    "timeframe": item.get("timeframe"),
+                }
+                for item in raw
+                if isinstance(item, dict) and item.get("title")
+            ]
+
+    # Fallback from detailed steps
+    fallback: list[dict] = []
+    for step in plan.get("steps") or []:
+        if not isinstance(step, dict):
+            continue
+        title = step.get("title") or "Untitled step"
+        days = step.get("estimated_days")
+        timeframe = f"{days} days" if days else None
+        fallback.append({"title": title, "timeframe": timeframe})
+    return fallback
+
+
+async def _deep_dive_response(item: dict, tasks: list[dict] | None = None) -> DeepDiveResponse:
+    if tasks is None:
+        tasks = await get_tasks_for_deep_dive(item["id"])
+    return DeepDiveResponse(
+        id=item["id"],
+        analysis_id=item["analysis_id"],
+        suggestion_key=item["suggestion_key"],
+        plan=item["plan"],
+        created_at=_parse_datetime(item["created_at"]),
+        tasks=[_task_response(t) for t in tasks],
     )
 
 
@@ -250,13 +312,55 @@ async def deep_dive(body: DeepDiveRequest):
         suggestion_key=body.suggestion_key,
         plan_json=plan,
     )
+    checklist = _extract_checklist_tasks(plan)
+    await save_tasks(deep_dive_id, checklist)
+    tasks = await get_tasks_for_deep_dive(deep_dive_id)
+
     return DeepDiveResponse(
         id=deep_dive_id,
         analysis_id=body.analysis_id,
         suggestion_key=body.suggestion_key,
         plan=plan,
         created_at=datetime.now(timezone.utc),
+        tasks=[_task_response(t) for t in tasks],
     )
+
+
+@app.patch(
+    "/api/tasks/{task_id}",
+    response_model=TaskResponse,
+    responses={404: {"description": "Not found"}},
+)
+async def patch_task(task_id: str, body: ToggleTaskRequest):
+    updated = await toggle_task(task_id, body.is_completed)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Task not found.")
+    return _task_response(updated)
+
+
+@app.get(
+    "/api/deep-dive/{deep_dive_id}",
+    response_model=DeepDiveResponse,
+    responses={404: {"description": "Not found"}},
+)
+async def deep_dive_detail(deep_dive_id: str):
+    dive = await get_deep_dive(deep_dive_id)
+    if dive is None:
+        raise HTTPException(status_code=404, detail="Deep-dive not found.")
+    return await _deep_dive_response(dive)
+
+
+@app.get(
+    "/api/deep-dive/{deep_dive_id}/tasks",
+    response_model=list[TaskResponse],
+    responses={404: {"description": "Not found"}},
+)
+async def list_deep_dive_tasks(deep_dive_id: str):
+    dive = await get_deep_dive(deep_dive_id)
+    if dive is None:
+        raise HTTPException(status_code=404, detail="Deep-dive not found.")
+    tasks = await get_tasks_for_deep_dive(deep_dive_id)
+    return [_task_response(t) for t in tasks]
 
 
 @app.get("/api/history", response_model=list[AnalysisSummary])
@@ -284,20 +388,15 @@ async def analysis_detail(analysis_id: str):
         raise HTTPException(status_code=404, detail="Analysis not found.")
 
     deep_dives = await get_deep_dives_for_analysis(analysis_id)
+    dive_responses: list[DeepDiveResponse] = []
+    for item in deep_dives:
+        dive_responses.append(await _deep_dive_response(item))
+
     return AnalysisDetailResponse(
         id=analysis["id"],
         job_title=analysis.get("job_title"),
         company=analysis.get("company"),
         result=analysis["result"],
         created_at=_parse_datetime(analysis["created_at"]),
-        deep_dives=[
-            DeepDiveResponse(
-                id=item["id"],
-                analysis_id=item["analysis_id"],
-                suggestion_key=item["suggestion_key"],
-                plan=item["plan"],
-                created_at=_parse_datetime(item["created_at"]),
-            )
-            for item in deep_dives
-        ],
+        deep_dives=dive_responses,
     )

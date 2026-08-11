@@ -42,6 +42,13 @@ class PlanStep(BaseModel):
     resources: list[Resource] = Field(default_factory=list)
 
 
+class ChecklistTask(BaseModel):
+    """A single checkable todo derived for the frontend task list."""
+
+    title: str
+    timeframe: str
+
+
 class DetailedPlan(BaseModel):
     """Round 2: deep-dive execution plan response."""
 
@@ -49,5 +56,7 @@ class DetailedPlan(BaseModel):
     description: str
     total_estimated_days: int = Field(ge=1)
     steps: list[PlanStep] = Field(min_length=3, max_length=6)
+    # Top-level checklist for todo UI (separate from steps[].tasks strings)
+    tasks: list[ChecklistTask] = Field(min_length=4, max_length=8)
     success_criteria: str
     resume_bullet: str

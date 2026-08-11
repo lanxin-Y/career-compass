@@ -112,13 +112,23 @@ JSON schema:
       ]
     }
   ],
+  "tasks": [
+    {
+      "title": <one concrete, checkable action the user can mark done>,
+      "timeframe": <e.g. "3 days", "1 week", "2 weeks">
+    }
+  ],
   "success_criteria": <clear definition of "done" the user can verify>,
   "resume_bullet": <one strong, ready-to-use resume bullet in past tense with impact>
 }
 
 Rules:
 - Provide 3-6 steps. Each step should be achievable in 1-3 days part-time.
-- tasks should be actionable checkboxes, not vague goals.
+- steps[].tasks should be actionable checkboxes for that step, not vague goals.
+- Also provide a top-level "tasks" array with 4-8 specific, actionable todos the user \
+  can check off one by one in a todo UI. Each should be completable within about \
+  1-2 weeks (or less). These todos should summarize/cover the plan — concrete actions, \
+  not vague advice like "learn SQL".
 - resources: only include real, useful links you are confident about; otherwise omit \
   or leave resources as []. Prefer domain-appropriate resources for the inferred field.
 - Tailor the plan to the selected suggestion AND the original JD + resume context.

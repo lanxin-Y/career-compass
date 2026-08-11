@@ -20,6 +20,21 @@ class DeepDiveRequest(BaseModel):
     )
 
 
+class ToggleTaskRequest(BaseModel):
+    is_completed: bool
+
+
+class TaskResponse(BaseModel):
+    id: str
+    deep_dive_id: str
+    title: str
+    timeframe: Optional[str] = None
+    sort_order: int
+    is_completed: bool
+    completed_at: Optional[datetime] = None
+    created_at: datetime
+
+
 class AnalysisResponse(BaseModel):
     id: str
     job_title: Optional[str] = None
@@ -42,6 +57,7 @@ class DeepDiveResponse(BaseModel):
     suggestion_key: str
     plan: dict[str, Any]
     created_at: datetime
+    tasks: list[TaskResponse] = Field(default_factory=list)
 
 
 class AnalysisDetailResponse(BaseModel):
