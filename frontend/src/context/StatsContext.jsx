@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
-import { getAnalysis, getHistory } from '../api'
+import { getAllTasks } from '../api'
 import { computeStats } from '../utils/gamification'
 
 const StatsContext = createContext(null)
@@ -13,19 +13,7 @@ export function StatsProvider({ children }) {
 
   const refreshStats = useCallback(async () => {
     try {
-      const history = await getHistory()
-      const details = await Promise.all(
-        history.map((item) => getAnalysis(item.id).catch(() => null)),
-      )
-      const collected = []
-      for (const detail of details) {
-        if (!detail?.deep_dives) continue
-        for (const dive of detail.deep_dives) {
-          for (const task of dive.tasks || []) {
-            collected.push(task)
-          }
-        }
-      }
+      const collected = await getAllTasks()
       setTasks(collected)
       setServerError(null)
     } catch {
@@ -43,26 +31,23 @@ export function StatsProvider({ children }) {
 
   const stats = useMemo(() => computeStats(tasks), [tasks])
 
-  const applyTaskUpdate = useCallback(
-    (updatedTask) => {
-      setTasks((prev) => {
-        const exists = prev.some((t) => t.id === updatedTask.id)
-        const next = exists
-          ? prev.map((t) => (t.id === updatedTask.id ? { ...t, ...updatedTask } : t))
-          : [...prev, updatedTask]
-        const before = computeStats(prev)
-        const after = computeStats(next)
-        if (after.level > before.level) {
-          setLevelUpToast(`Level up! You're now a ${after.title}.`)
-          setPulseLevel(true)
-          window.setTimeout(() => setPulseLevel(false), 1600)
-          window.setTimeout(() => setLevelUpToast(null), 3200)
-        }
-        return next
-      })
-    },
-    [],
-  )
+  const applyTaskUpdate = useCallback((updatedTask) => {
+    setTasks((prev) => {
+      const exists = prev.some((t) => t.id === updatedTask.id)
+      const next = exists
+        ? prev.map((t) => (t.id === updatedTask.id ? { ...t, ...updatedTask } : t))
+        : [...prev, updatedTask]
+      const before = computeStats(prev)
+      const after = computeStats(next)
+      if (after.level > before.level) {
+        setLevelUpToast(`Level up! You're now a ${after.title}.`)
+        setPulseLevel(true)
+        window.setTimeout(() => setPulseLevel(false), 1600)
+        window.setTimeout(() => setLevelUpToast(null), 3200)
+      }
+      return next
+    })
+  }, [])
 
   const value = {
     tasks,

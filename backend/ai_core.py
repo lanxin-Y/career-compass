@@ -17,7 +17,6 @@ from services.ai_analyzer import (
 from services.resume_parser import extract_text_from_pdf
 from services.schemas import Suggestion
 
-# Re-export for endpoint error handling
 __all__ = [
     "AIAnalyzerError",
     "analyze_gap",
@@ -31,9 +30,13 @@ def parse_resume_pdf(file_path: str | Path) -> str:
     return extract_text_from_pdf(file_path)
 
 
-def analyze_gap(jd_text: str, resume_text: str) -> dict:
+def analyze_gap(
+    jd_text: str,
+    resume_text: str,
+    provider: str = "claude",
+) -> dict:
     """Round 1 — return a plain dict for JSON storage / API responses."""
-    return _analyze_gap(jd_text, resume_text).model_dump()
+    return _analyze_gap(jd_text, resume_text, provider=provider).model_dump()
 
 
 def generate_deep_dive(
@@ -41,6 +44,7 @@ def generate_deep_dive(
     jd_text: str,
     resume_text: str,
     user_notes: str | None = None,
+    provider: str = "claude",
 ) -> dict:
     """Round 2 — return a plain dict for JSON storage / API responses."""
     return _create_deep_dive_plan(
@@ -48,4 +52,5 @@ def generate_deep_dive(
         jd_text,
         resume_text,
         user_notes=user_notes,
+        provider=provider,
     ).model_dump()

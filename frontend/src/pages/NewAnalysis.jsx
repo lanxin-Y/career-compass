@@ -3,10 +3,12 @@ import { useNavigate } from 'react-router-dom'
 import { Loader2 } from 'lucide-react'
 import { analyzeGap } from '../api'
 import FileUpload from '../components/FileUpload'
+import { useProvider } from '../context/ProviderContext'
 import { useStats } from '../context/StatsContext'
 
 export default function NewAnalysis() {
   const navigate = useNavigate()
+  const { provider } = useProvider()
   const { refreshStats } = useStats()
   const [jobTitle, setJobTitle] = useState('')
   const [company, setCompany] = useState('')
@@ -33,7 +35,13 @@ export default function NewAnalysis() {
 
     setLoading(true)
     try {
-      const result = await analyzeGap(jdText, file, jobTitle.trim(), company.trim())
+      const result = await analyzeGap(
+        jdText,
+        file,
+        jobTitle.trim(),
+        company.trim(),
+        provider,
+      )
       if (result.cached) {
         setCachedNote('Retrieved from previous analysis')
       }
@@ -60,6 +68,7 @@ export default function NewAnalysis() {
       <h1 className="text-2xl font-semibold tracking-tight">New Analysis</h1>
       <p className="mt-1 text-sm text-muted">
         Paste a job description and upload your resume to find skill gaps.
+        Using <span className="font-medium text-ink">{provider}</span> (change on Dashboard).
       </p>
 
       <form onSubmit={handleSubmit} className="mt-8 space-y-5">

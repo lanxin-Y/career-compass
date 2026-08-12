@@ -8,9 +8,19 @@ import re
 from typing import TypeVar
 
 import anthropic
+import httpx
 from pydantic import BaseModel, ValidationError
 
-from .config import MAX_TOKENS, MODEL_NAME, TEMPERATURE, require_api_key
+from .config import (
+    DEEPSEEK_BASE_URL,
+    DEEPSEEK_MODEL,
+    MAX_TOKENS,
+    MODEL_NAME,
+    TEMPERATURE,
+    normalize_provider,
+    require_api_key,
+    require_deepseek_api_key,
+)
 from .schemas import AnalysisResult, DetailedPlan, Suggestion
 
 logger = logging.getLogger(__name__)
@@ -184,10 +194,10 @@ but adapt specifics (domain, dataset, tools, framing) to the user's preferences.
 
 
 # ---------------------------------------------------------------------------
-# Claude client helpers
+# LLM client helpers (Claude + DeepSeek)
 # ---------------------------------------------------------------------------
 
-def _get_client() -> anthropic.Anthropic:
+def _get_claude_client() -> anthropic.Anthropic:
     return anthropic.Anthropic(api_key=require_api_key())
 
 
@@ -203,7 +213,7 @@ def _extract_json_text(raw: str) -> str:
     start = text.find("{")
     end = text.rfind("}")
     if start == -1 or end == -1 or end <= start:
-        raise AIAnalyzerError("Claude response did not contain a JSON object.")
+        raise AIAnalyzerError("Model response did not contain a JSON object.")
     return text[start : end + 1]
 
 
@@ -211,16 +221,16 @@ def _parse_model_output(raw: str, model: type[T]) -> T:
     try:
         payload = json.loads(_extract_json_text(raw))
     except json.JSONDecodeError as exc:
-        raise AIAnalyzerError(f"Failed to parse Claude JSON: {exc}") from exc
+        raise AIAnalyzerError(f"Failed to parse model JSON: {exc}") from exc
 
     try:
         return model.model_validate(payload)
     except ValidationError as exc:
-        raise AIAnalyzerError(f"Claude JSON failed schema validation: {exc}") from exc
+        raise AIAnalyzerError(f"Model JSON failed schema validation: {exc}") from exc
 
 
 def _call_claude(system: str, user: str) -> str:
-    client = _get_client()
+    client = _get_claude_client()
     try:
         message = client.messages.create(
             model=MODEL_NAME,
@@ -256,33 +266,97 @@ def _call_claude(system: str, user: str) -> str:
     if not parts:
         raise AIAnalyzerError("Claude returned an empty response.")
 
-    # Soft warning if truncated
     if message.stop_reason == "max_tokens":
         logger.warning("Claude response truncated (hit max_tokens=%s).", MAX_TOKENS)
 
     return "\n".join(parts)
 
 
+def _call_deepseek(system: str, user: str) -> str:
+    api_key = require_deepseek_api_key()
+    url = DEEPSEEK_BASE_URL.rstrip("/") + "/chat/completions"
+    try:
+        response = httpx.post(
+            url,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": DEEPSEEK_MODEL,
+                "temperature": TEMPERATURE,
+                "max_tokens": MAX_TOKENS,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+            },
+            timeout=120.0,
+        )
+    except httpx.TimeoutException as exc:
+        raise AIAnalyzerError("DeepSeek API timed out. Please try again.") from exc
+    except httpx.HTTPError as exc:
+        raise AIAnalyzerError(f"Could not connect to DeepSeek API: {exc}") from exc
+
+    if response.status_code == 401:
+        raise AIAnalyzerError(
+            "DeepSeek authentication failed. Check DEEPSEEK_API_KEY."
+        )
+    if response.status_code == 429:
+        raise AIAnalyzerError(
+            "DeepSeek API rate limit hit. Wait a moment and try again."
+        )
+    if response.status_code >= 400:
+        detail = response.text[:300]
+        raise AIAnalyzerError(
+            f"DeepSeek API error ({response.status_code}): {detail}"
+        )
+
+    try:
+        data = response.json()
+        content = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
+        raise AIAnalyzerError("DeepSeek returned an unexpected response shape.") from exc
+
+    if not content or not str(content).strip():
+        raise AIAnalyzerError("DeepSeek returned an empty response.")
+    return str(content)
+
+
+def _call_llm(system: str, user: str, provider: str = "claude") -> str:
+    provider = normalize_provider(provider)
+    if provider == "deepseek":
+        return _call_deepseek(system, user)
+    return _call_claude(system, user)
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
-def analyze_gap(jd_text: str, resume_text: str) -> AnalysisResult:
+def analyze_gap(
+    jd_text: str,
+    resume_text: str,
+    provider: str = "claude",
+) -> AnalysisResult:
     """
     Round 1: Compare resume vs JD and return structured gap analysis.
 
     Args:
         jd_text: Full job description text.
         resume_text: Extracted resume text.
+        provider: "claude" or "deepseek".
 
     Returns:
         Validated AnalysisResult.
     """
     _require_jd_and_resume(jd_text, resume_text)
+    provider = normalize_provider(provider)
 
-    raw = _call_claude(
+    raw = _call_llm(
         GAP_ANALYSIS_SYSTEM,
         _gap_analysis_user_prompt(jd_text, resume_text),
+        provider=provider,
     )
     return _parse_model_output(raw, AnalysisResult)
 
@@ -308,6 +382,7 @@ def create_deep_dive_plan(
     jd_text: str,
     resume_text: str,
     user_notes: str | None = None,
+    provider: str = "claude",
 ) -> DetailedPlan:
     """
     Round 2: Turn one selected Round-1 suggestion into a step-by-step plan.
@@ -318,16 +393,19 @@ def create_deep_dive_plan(
         resume_text: Original resume text.
         user_notes: Optional free-text preferences from the user, e.g.
             "Keep this project idea, but use game data instead of finance data."
+        provider: "claude" or "deepseek".
 
     Returns:
         Validated DetailedPlan.
     """
     _require_jd_and_resume(jd_text, resume_text)
     suggestion = _normalize_suggestion(suggestion)
+    provider = normalize_provider(provider)
 
-    raw = _call_claude(
+    raw = _call_llm(
         DEEP_DIVE_SYSTEM,
         _deep_dive_user_prompt(suggestion, jd_text, resume_text, user_notes),
+        provider=provider,
     )
     return _parse_model_output(raw, DetailedPlan)
 
@@ -337,11 +415,12 @@ def create_deep_dive_plans(
     jd_text: str,
     resume_text: str,
     user_notes: str | list[str | None] | None = None,
+    provider: str = "claude",
 ) -> list[DetailedPlan]:
     """
     Round 2 (multi-select): build a deep-dive plan for each selected suggestion.
 
-    Each suggestion gets its own Claude call so plans stay focused and high-quality.
+    Each suggestion gets its own LLM call so plans stay focused and high-quality.
     Order of returned plans matches the order of input suggestions.
 
     Args:
@@ -350,6 +429,7 @@ def create_deep_dive_plans(
         resume_text: Original resume text.
         user_notes: Optional notes for all suggestions (one string), or a list of
             notes aligned with `suggestions` (use None for "no notes" on an item).
+        provider: "claude" or "deepseek".
 
     Returns:
         List of DetailedPlan, one per selected suggestion.
@@ -357,6 +437,7 @@ def create_deep_dive_plans(
     _require_jd_and_resume(jd_text, resume_text)
     if not suggestions:
         raise ValueError("suggestions must contain at least one item.")
+    provider = normalize_provider(provider)
 
     if user_notes is None or isinstance(user_notes, str):
         notes_list: list[str | None] = [user_notes] * len(suggestions)
@@ -373,7 +454,11 @@ def create_deep_dive_plans(
         try:
             plans.append(
                 create_deep_dive_plan(
-                    item, jd_text, resume_text, user_notes=notes_list[index]
+                    item,
+                    jd_text,
+                    resume_text,
+                    user_notes=notes_list[index],
+                    provider=provider,
                 )
             )
         except AIAnalyzerError as exc:

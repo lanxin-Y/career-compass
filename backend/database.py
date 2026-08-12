@@ -13,6 +13,9 @@ import aiosqlite
 DB_DIR = Path(__file__).resolve().parent / "data"
 DB_PATH = DB_DIR / "career_compass.db"
 
+# Sentinel analysis row for user-created (non-AI) projects.
+MANUAL_ANALYSIS_ID = "__manual__"
+
 
 async def init_db() -> None:
     DB_DIR.mkdir(parents=True, exist_ok=True)
@@ -67,10 +70,31 @@ async def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_tasks_deep_dive_id "
             "ON tasks(deep_dive_id)"
         )
+        # Migration: deadline for quest sorting / display
+        async with db.execute("PRAGMA table_info(analyses)") as cursor:
+            columns = {row[1] for row in await cursor.fetchall()}
+        if "deadline" not in columns:
+            await db.execute("ALTER TABLE analyses ADD COLUMN deadline TEXT")
+
+        # Bucket for manually created projects (hidden from /api/history).
+        await db.execute(
+            """
+            INSERT OR IGNORE INTO analyses (
+                id, job_title, company, jd_text, resume_text,
+                resume_filename, content_hash, result_json
+            ) VALUES (?, ?, NULL, '', '', NULL, NULL, ?)
+            """,
+            (
+                MANUAL_ANALYSIS_ID,
+                "Manual Projects",
+                json.dumps({"source": "manual", "suggestions": []}),
+            ),
+        )
         await db.commit()
 
 
 def _row_to_analysis(row: aiosqlite.Row) -> dict[str, Any]:
+    keys = set(row.keys())
     return {
         "id": row["id"],
         "job_title": row["job_title"],
@@ -81,6 +105,7 @@ def _row_to_analysis(row: aiosqlite.Row) -> dict[str, Any]:
         "content_hash": row["content_hash"],
         "result": json.loads(row["result_json"]),
         "created_at": row["created_at"],
+        "deadline": row["deadline"] if "deadline" in keys else None,
     }
 
 
@@ -186,14 +211,20 @@ async def get_analysis(analysis_id: str) -> dict[str, Any] | None:
 
 
 async def get_all_analyses() -> list[dict[str, Any]]:
+    """Soonest deadline first; items without a deadline sink to the bottom."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             """
-            SELECT id, job_title, company, created_at
+            SELECT id, job_title, company, created_at, deadline
             FROM analyses
-            ORDER BY created_at DESC
-            """
+            WHERE id != ?
+            ORDER BY
+              CASE WHEN deadline IS NULL OR deadline = '' THEN 1 ELSE 0 END,
+              deadline ASC,
+              created_at DESC
+            """,
+            (MANUAL_ANALYSIS_ID,),
         ) as cursor:
             rows = await cursor.fetchall()
     return [
@@ -202,9 +233,88 @@ async def get_all_analyses() -> list[dict[str, Any]]:
             "job_title": row["job_title"],
             "company": row["company"],
             "created_at": row["created_at"],
+            "deadline": row["deadline"],
         }
         for row in rows
     ]
+
+
+async def update_analysis_deadline(
+    analysis_id: str,
+    deadline: str | None,
+) -> dict[str, Any] | None:
+    """Set or clear quest deadline (YYYY-MM-DD or None)."""
+    if analysis_id == MANUAL_ANALYSIS_ID:
+        return None
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute(
+            "UPDATE analyses SET deadline = ? WHERE id = ?",
+            (deadline, analysis_id),
+        )
+        await db.commit()
+        async with db.execute(
+            "SELECT * FROM analyses WHERE id = ?",
+            (analysis_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+    if row is None:
+        return None
+    return _row_to_analysis(row)
+
+
+async def get_all_deep_dives() -> list[dict[str, Any]]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            """
+            SELECT id, analysis_id, suggestion_key, plan_json, created_at
+            FROM deep_dives
+            ORDER BY created_at DESC
+            """
+        ) as cursor:
+            rows = await cursor.fetchall()
+    return [
+        {
+            "id": row["id"],
+            "analysis_id": row["analysis_id"],
+            "suggestion_key": row["suggestion_key"],
+            "plan": json.loads(row["plan_json"]),
+            "created_at": row["created_at"],
+        }
+        for row in rows
+    ]
+
+
+async def get_all_tasks() -> list[dict[str, Any]]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            """
+            SELECT id, deep_dive_id, title, timeframe, sort_order,
+                   is_completed, completed_at, created_at
+            FROM tasks
+            ORDER BY created_at ASC
+            """
+        ) as cursor:
+            rows = await cursor.fetchall()
+    return [_row_to_task(row) for row in rows]
+
+
+async def delete_deep_dive(deep_dive_id: str) -> bool:
+    """Permanently delete a deep-dive and its checklist tasks. Returns False if missing."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT id FROM deep_dives WHERE id = ?",
+            (deep_dive_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        if row is None:
+            return False
+        await db.execute("DELETE FROM tasks WHERE deep_dive_id = ?", (deep_dive_id,))
+        await db.execute("DELETE FROM deep_dives WHERE id = ?", (deep_dive_id,))
+        await db.commit()
+    return True
 
 
 async def get_deep_dive(deep_dive_id: str) -> dict[str, Any] | None:

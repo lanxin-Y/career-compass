@@ -1,16 +1,18 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
-import { Loader2 } from 'lucide-react'
-import { getDeepDive, toggleTask } from '../api'
+import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Loader2, Trash2 } from 'lucide-react'
+import { deleteDeepDive, getDeepDive, toggleTask } from '../api'
 import TaskItem from '../components/TaskItem'
 import { useStats } from '../context/StatsContext'
 
 export default function DeepDive() {
   const { id } = useParams()
+  const navigate = useNavigate()
   const { applyTaskUpdate, refreshStats } = useStats()
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [deleting, setDeleting] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -45,6 +47,22 @@ export default function DeepDive() {
   const completedCount = (data?.tasks || []).filter((t) => t.is_completed).length
   const totalCount = (data?.tasks || []).length
   const progress = totalCount ? completedCount / totalCount : 0
+
+  async function handleDelete() {
+    const ok = window.confirm(
+      'Delete this plan permanently? This cannot be undone.',
+    )
+    if (!ok) return
+    setDeleting(true)
+    try {
+      await deleteDeepDive(id)
+      await refreshStats()
+      navigate('/')
+    } catch (err) {
+      setError(err?.detail || 'Failed to delete plan.')
+      setDeleting(false)
+    }
+  }
 
   async function handleToggle(taskId, isCompleted) {
     // Optimistic update
@@ -97,6 +115,10 @@ export default function DeepDive() {
   }
 
   const plan = data.plan || {}
+  const isManual =
+    data.suggestion_key === 'manual' ||
+    data.analysis_id === '__manual__' ||
+    plan.source === 'manual'
   const resources = []
   for (const step of plan.steps || []) {
     for (const res of step.resources || []) {
@@ -106,20 +128,34 @@ export default function DeepDive() {
 
   return (
     <div className="space-y-8">
-      <div>
-        <Link
-          to={`/analysis/${data.analysis_id}`}
-          className="text-sm text-accent hover:underline"
-          onClick={() => refreshStats()}
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <Link
+            to={isManual ? '/' : `/analysis/${data.analysis_id}`}
+            className="text-sm text-accent hover:underline"
+            onClick={() => refreshStats()}
+          >
+            {isManual ? '← Back to dashboard' : '← Back to analysis'}
+          </Link>
+          <h1 className="mt-3 text-2xl font-semibold tracking-tight">
+            {plan.plan_title || 'Deep Dive Plan'}
+          </h1>
+          <p className="mt-1 text-sm text-muted">
+            {isManual
+              ? 'Manual project'
+              : `Suggestion key: ${data.suggestion_key}`}
+            {plan.estimated_time ? ` · Est. ${plan.estimated_time}` : ''}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={handleDelete}
+          disabled={deleting}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-sm text-muted hover:border-red-200 hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
         >
-          ← Back to analysis
-        </Link>
-        <h1 className="mt-3 text-2xl font-semibold tracking-tight">
-          {plan.plan_title || 'Deep Dive Plan'}
-        </h1>
-        <p className="mt-1 text-sm text-muted">
-          Suggestion key: {data.suggestion_key}
-        </p>
+          <Trash2 className="h-4 w-4" />
+          {deleting ? 'Deleting...' : 'Delete plan'}
+        </button>
       </div>
 
       <section className="rounded-lg border border-slate-200 p-5 shadow-sm space-y-3">

@@ -18,6 +18,30 @@ class DeepDiveRequest(BaseModel):
         default=None,
         description="Optional user preferences to steer the deep-dive plan",
     )
+    provider: str = Field(
+        default="claude",
+        description='LLM provider: "claude" or "deepseek"',
+    )
+
+
+class ManualTaskInput(BaseModel):
+    title: str = Field(..., min_length=1)
+    timeframe: Optional[str] = Field(
+        default=None,
+        description='e.g. "3 days", "1 week"',
+    )
+
+
+class ManualPlanRequest(BaseModel):
+    """User-authored project in the same shape as an AI deep-dive plan."""
+
+    title: str = Field(..., min_length=1)
+    description: str = ""
+    estimated_time: Optional[str] = Field(
+        default=None,
+        description="Overall estimate for the whole project, e.g. '2 weeks'",
+    )
+    tasks: list[ManualTaskInput] = Field(min_length=1)
 
 
 class ToggleTaskRequest(BaseModel):
@@ -41,6 +65,7 @@ class AnalysisResponse(BaseModel):
     company: Optional[str] = None
     result: dict[str, Any]
     created_at: datetime
+    deadline: Optional[str] = None
     cached: bool = False
 
 
@@ -49,6 +74,14 @@ class AnalysisSummary(BaseModel):
     job_title: Optional[str] = None
     company: Optional[str] = None
     created_at: datetime
+    deadline: Optional[str] = None
+
+
+class DeadlineUpdateRequest(BaseModel):
+    deadline: Optional[str] = Field(
+        default=None,
+        description='YYYY-MM-DD, or null/empty to clear',
+    )
 
 
 class DeepDiveResponse(BaseModel):
@@ -66,6 +99,7 @@ class AnalysisDetailResponse(BaseModel):
     company: Optional[str] = None
     result: dict[str, Any]
     created_at: datetime
+    deadline: Optional[str] = None
     deep_dives: list[DeepDiveResponse]
 
 

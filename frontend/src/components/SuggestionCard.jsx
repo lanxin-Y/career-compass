@@ -2,18 +2,14 @@ import { ArrowRight, CheckCircle2 } from 'lucide-react'
 
 export default function SuggestionCard({
   suggestion,
-  index,
   hasPlan,
-  loading,
-  onDeepDive,
-  onOpenPlan,
+  onSelect,
 }) {
   return (
     <button
       type="button"
-      disabled={loading}
-      onClick={() => (hasPlan ? onOpenPlan?.(index) : onDeepDive(index))}
-      className={`w-full rounded-lg border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:border-accent/40 hover:shadow disabled:cursor-not-allowed disabled:opacity-70`}
+      onClick={onSelect}
+      className="w-full rounded-lg border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:border-accent/40 hover:shadow"
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
@@ -36,11 +32,9 @@ export default function SuggestionCard({
               <CheckCircle2 className="h-3.5 w-3.5" />
               Plan Created
             </span>
-          ) : loading ? (
-            <span className="text-xs text-accent">Generating...</span>
           ) : (
             <span className="inline-flex items-center gap-1 text-sm font-medium text-accent">
-              Deep Dive
+              View details
               <ArrowRight className="h-4 w-4" />
             </span>
           )}

@@ -1,4 +1,4 @@
-import { Compass } from 'lucide-react'
+import { Cat } from 'lucide-react'
 import { Link, Outlet } from 'react-router-dom'
 import { useStats } from '../context/StatsContext'
 import StatsBar from './StatsBar'
@@ -11,7 +11,9 @@ export default function Layout() {
       <header className="sticky top-0 z-20 border-b border-slate-100 bg-white/95 backdrop-blur">
         <div className="mx-auto flex max-w-3xl items-center justify-between gap-4 px-4 py-3">
           <Link to="/" className="flex items-center gap-2 font-semibold tracking-tight">
-            <Compass className="h-5 w-5 text-accent" />
+            <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-amber-50 text-amber-600">
+              <Cat className="h-5 w-5" strokeWidth={2.25} />
+            </span>
             <span>Career Compass</span>
           </Link>
           <StatsBar />

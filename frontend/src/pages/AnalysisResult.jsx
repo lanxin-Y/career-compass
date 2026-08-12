@@ -2,30 +2,46 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { Loader2 } from 'lucide-react'
 import { deepDive, getAnalysis } from '../api'
+import DeadlineControls from '../components/DeadlineControls'
 import SuggestionCard from '../components/SuggestionCard'
+import SuggestionDetailModal from '../components/SuggestionDetailModal'
+import { useProvider } from '../context/ProviderContext'
 import { useStats } from '../context/StatsContext'
 
-function formatDate(value) {
-  try {
-    return new Date(value).toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-    })
-  } catch {
-    return value
-  }
+function activePlanLabel(count) {
+  if (count === 1) return '1 active plan'
+  return `${count} active plans`
+}
+
+function isProjectComplete(dive) {
+  const tasks = dive.tasks || []
+  return tasks.length > 0 && tasks.every((t) => t.is_completed)
+}
+
+const SKILL_CHIP_STYLES = [
+  'bg-sky-50 text-sky-700 ring-1 ring-sky-100',
+  'bg-violet-50 text-violet-700 ring-1 ring-violet-100',
+  'bg-amber-50 text-amber-700 ring-1 ring-amber-100',
+]
+
+function importanceBadgeClass(importance) {
+  const key = String(importance || '').toLowerCase()
+  if (key === 'high') return 'bg-violet-700 text-white'
+  if (key === 'medium') return 'bg-violet-400 text-white'
+  return 'bg-violet-200 text-violet-800'
 }
 
 export default function AnalysisResult() {
   const { id } = useParams()
   const navigate = useNavigate()
   const location = useLocation()
+  const { provider } = useProvider()
   const { refreshStats } = useStats()
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
-  const [divingIndex, setDivingIndex] = useState(null)
+  const [selectedIndex, setSelectedIndex] = useState(null)
+  const [confirming, setConfirming] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -66,22 +82,36 @@ export default function AnalysisResult() {
     )
   }
 
-  async function handleDeepDive(index) {
-    setDivingIndex(index)
+  function suggestionHasPlan(index, title) {
+    return (
+      plannedKeys.has(String(index)) ||
+      plannedKeys.has(`suggestions[${index}]`) ||
+      plannedKeys.has(title)
+    )
+  }
+
+  async function handleConfirmDeepDive(notes) {
+    if (selectedIndex == null) return
+    setConfirming(true)
     setError(null)
     try {
-      const result = await deepDive(id, String(index))
+      const result = await deepDive(id, String(selectedIndex), notes || null, provider)
       await refreshStats()
+      setSelectedIndex(null)
       navigate(`/deep-dive/${result.id}`)
     } catch (err) {
       setError(err?.detail || 'Failed to generate deep-dive plan.')
-      setDivingIndex(null)
+    } finally {
+      setConfirming(false)
     }
   }
 
   function handleOpenPlan(index, title) {
     const dive = findDiveForSuggestion(index, title)
-    if (dive) navigate(`/deep-dive/${dive.id}`)
+    if (dive) {
+      setSelectedIndex(null)
+      navigate(`/deep-dive/${dive.id}`)
+    }
   }
 
   if (loading) {
@@ -100,6 +130,11 @@ export default function AnalysisResult() {
   const result = data.result || {}
   const suggestions = result.suggestions || []
   const gaps = result.skill_gaps || []
+  const selectedSuggestion =
+    selectedIndex == null ? null : suggestions[selectedIndex] || null
+  const openPlanCount = (data.deep_dives || []).filter(
+    (dive) => !isProjectComplete(dive),
+  ).length
 
   return (
     <div className="space-y-8">
@@ -107,13 +142,29 @@ export default function AnalysisResult() {
         <Link to="/" className="text-sm text-accent hover:underline">
           ← Back to dashboard
         </Link>
-        <h1 className="mt-3 text-2xl font-semibold tracking-tight">
-          {data.job_title || 'Untitled analysis'}
-          {data.company ? (
-            <span className="font-normal text-muted"> · {data.company}</span>
-          ) : null}
-        </h1>
-        <p className="mt-1 text-sm text-muted">{formatDate(data.created_at)}</p>
+        <div className="mt-3 flex flex-wrap items-start justify-between gap-3">
+          <h1 className="text-2xl font-semibold tracking-tight">
+            {data.job_title || 'Untitled analysis'}
+            {data.company ? (
+              <span className="font-normal text-muted"> · {data.company}</span>
+            ) : null}
+          </h1>
+          {openPlanCount > 0 ? (
+            <span className="shrink-0 rounded-full bg-violet-50 px-2.5 py-1 text-[11px] font-medium text-violet-700">
+              {activePlanLabel(openPlanCount)}
+            </span>
+          ) : (
+            <span className="shrink-0 rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-muted">
+              No plan yet
+            </span>
+          )}
+        </div>
+        <DeadlineControls
+          analysisId={data.id}
+          createdAt={data.created_at}
+          deadline={data.deadline}
+          onUpdated={(deadline) => setData((prev) => (prev ? { ...prev, deadline } : prev))}
+        />
         {location.state?.cached && (
           <p className="mt-2 text-xs text-muted">Retrieved from previous analysis</p>
         )}
@@ -139,10 +190,10 @@ export default function AnalysisResult() {
           <div className="mt-5">
             <h3 className="text-sm font-medium mb-2">Matching skills</h3>
             <div className="flex flex-wrap gap-2">
-              {result.matching_skills.slice(0, 12).map((skill) => (
+              {result.matching_skills.slice(0, 12).map((skill, index) => (
                 <span
                   key={skill}
-                  className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs text-success"
+                  className={`rounded-full px-2.5 py-1 text-xs ${SKILL_CHIP_STYLES[index % SKILL_CHIP_STYLES.length]}`}
                 >
                   {skill}
                 </span>
@@ -160,10 +211,14 @@ export default function AnalysisResult() {
                   key={`${gap.skill}-${gap.importance}`}
                   className="rounded-lg bg-slate-50 px-3 py-2 text-sm"
                 >
-                  <span className="font-medium">{gap.skill}</span>
-                  <span className="ml-2 font-mono text-[11px] uppercase text-muted">
-                    {gap.importance}
-                  </span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-medium">{gap.skill}</span>
+                    <span
+                      className={`rounded-full px-2 py-0.5 font-mono text-[11px] uppercase tracking-wide ${importanceBadgeClass(gap.importance)}`}
+                    >
+                      {gap.importance}
+                    </span>
+                  </div>
                   {gap.detail && (
                     <p className="mt-1 text-muted text-xs leading-relaxed">{gap.detail}</p>
                   )}
@@ -175,49 +230,35 @@ export default function AnalysisResult() {
       </section>
 
       <section>
-        <h2 className="text-lg font-semibold mb-3">Growth suggestions</h2>
+        <h2 className="text-lg font-semibold mb-1">Growth suggestions</h2>
+        <p className="mb-3 text-sm text-muted">
+          Click a card to review details, add your notes, then confirm Deep Dive.
+        </p>
         <div className="space-y-3">
           {suggestions.map((suggestion, index) => (
             <SuggestionCard
               key={`${suggestion.title}-${index}`}
               suggestion={suggestion}
-              index={index}
-              hasPlan={
-                plannedKeys.has(String(index)) ||
-                plannedKeys.has(`suggestions[${index}]`) ||
-                plannedKeys.has(suggestion.title)
-              }
-              loading={divingIndex === index}
-              onDeepDive={handleDeepDive}
-              onOpenPlan={() => handleOpenPlan(index, suggestion.title)}
+              hasPlan={suggestionHasPlan(index, suggestion.title)}
+              onSelect={() => setSelectedIndex(index)}
             />
           ))}
         </div>
         {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
       </section>
 
-      {data.deep_dives?.length > 0 && (
-        <section>
-          <h2 className="text-lg font-semibold mb-3">Your Plans</h2>
-          <ul className="space-y-2">
-            {data.deep_dives.map((dive) => (
-              <li key={dive.id}>
-                <Link
-                  to={`/deep-dive/${dive.id}`}
-                  className="block rounded-lg border border-slate-200 px-4 py-3 text-sm hover:border-accent/40"
-                >
-                  <span className="font-medium">
-                    {dive.plan?.plan_title || `Plan for suggestion ${dive.suggestion_key}`}
-                  </span>
-                  <span className="ml-2 text-muted">
-                    {(dive.tasks || []).filter((t) => t.is_completed).length}/
-                    {(dive.tasks || []).length} tasks
-                  </span>
-                </Link>
-              </li>
-            ))}
-          </ul>
-        </section>
+      {selectedSuggestion && (
+        <SuggestionDetailModal
+          suggestion={selectedSuggestion}
+          index={selectedIndex}
+          hasPlan={suggestionHasPlan(selectedIndex, selectedSuggestion.title)}
+          loading={confirming}
+          onClose={() => !confirming && setSelectedIndex(null)}
+          onConfirmDeepDive={handleConfirmDeepDive}
+          onOpenPlan={() =>
+            handleOpenPlan(selectedIndex, selectedSuggestion.title)
+          }
+        />
       )}
     </div>
   )
