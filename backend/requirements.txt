@@ -6,3 +6,4 @@ pydantic
 aiosqlite
 anthropic
 pdfplumber
+httpx
